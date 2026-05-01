@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import altair as alt
 import plotly.graph_objects as go
-import sns
+import seaborn as sns
 import matplotlib.pyplot as plt
 from groq import Groq
 
