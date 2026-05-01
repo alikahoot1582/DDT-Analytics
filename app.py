@@ -45,7 +45,7 @@ def get_llama_3_1_strategy(api_key, context_df, target_r):
     prompt = f"Analyze this DDT trajectory: {history}. Goal Reward: {target_r}. What is the optimal action strategy?"
     
     completion = client.chat.completions.create(
-        model="llama-3.1-70b-versatile",
+        model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}]
     )
     return completion.choices[0].message.content
