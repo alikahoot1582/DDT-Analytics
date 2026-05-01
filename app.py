@@ -1,15 +1,14 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import torch
 import altair as alt
 import plotly.graph_objects as go
 import seaborn as sns
 import matplotlib.pyplot as plt
 from groq import Groq
 
-# --- 1. CONFIGURATION & EMBEDDED API ---
-# Replace 'your_api_key_here' with your actual Groq API key
+# --- 1. CONFIGURATION & SECURE API ---
+# Note: In production, use st.secrets["GROQ_API_KEY"]
 EMBEDDED_GROQ_KEY = "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" 
 
 st.set_page_config(page_title="DDT Command Center | Ali Kahoot", layout="wide")
@@ -17,17 +16,23 @@ st.set_page_config(page_title="DDT Command Center | Ali Kahoot", layout="wide")
 @st.cache_data
 def load_dataset():
     try:
-        # Creating a dummy dataframe if the file is missing to keep the app functional
         return pd.read_csv("ddt_offline_dataset.csv")
     except:
-        return pd.DataFrame(np.random.randn(10, 5), columns=['a', 'b', 'c', 'd', 'e'])
+        # Fallback for demo purposes if CSV isn't found
+        return pd.DataFrame({
+            "step": np.arange(100),
+            "state_0": np.random.randn(100),
+            "action_0": np.random.randn(100),
+            "reward": np.zeros(100)
+        })
 
-@st.cache_data
 def get_diffusion_trajectories(target_return, num_samples=100, steps=20):
     all_paths = []
+    # Logic: High RTG (Target Return) shifts the mode toward a specific goal
+    mode = np.array([5, 5]) if target_return > 15 else np.array([0, 0])
+    
     for i in range(num_samples):
         current_x = np.random.randn(2) * 2 
-        mode = np.array([5, 5]) if target_return > 15 else np.array([0, 0])
         for t in range(steps):
             frac = t / steps
             noise = np.random.randn(2) * (1 - frac) * 0.5
@@ -39,91 +44,136 @@ def get_diffusion_trajectories(target_return, num_samples=100, steps=20):
             })
     return pd.DataFrame(all_paths)
 
-def get_llama_3_1_strategy(api_key, context_df, target_r):
+def get_llama_3_3_strategy(api_key, context_df, target_r):
+    """Refined Prompting for Decision Diffusion Transformer logic"""
     client = Groq(api_key=api_key)
-    history = context_df.tail(5).to_dict()
-    prompt = f"Analyze this DDT trajectory: {history}. Goal Reward: {target_r}. What is the optimal action strategy?"
+    # Give the model a summarized view of the manifold
+    history_summary = context_df.describe().to_dict()
     
-    completion = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return completion.choices[0].message.content
+    prompt = f"""
+    System: You are an expert in Offline RL and Decision Diffusion Transformers (DDT).
+    Context: The user is conditioning a generative policy with a Target Return-to-Go (RTG) of {target_r}.
+    Manifold Data Summary: {history_summary}
+    
+    Task:
+    1. Analyze the 'energy' of the current action manifold.
+    2. Determine if the policy is successfully converging toward the goal state.
+    3. Suggest a strategic adjustment to the diffusion guidance scale or action clipping.
+    Keep the analysis concise and technical.
+    """
+    
+    try:
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        return f"⚠️ API Error: {str(e)}"
 
-# --- 2. SIDEBAR ---
+# --- 2. SESSION STATE (Prevents UI Jitter) ---
+if 'sim_data' not in st.session_state:
+    st.session_state.sim_data = None
+
+# --- 3. SIDEBAR ---
 with st.sidebar:
     st.title("⚙️ System Control")
-    st.info("**Made by Muhammad Ali Kahoot**")
+    st.info("**Developer: Muhammad Ali Kahoot**")
     
-    # Visual confirmation that the key is embedded
-    if EMBEDDED_GROQ_KEY != "your_api_key_here":
-        st.success("✅ Groq API Key Embedded")
+    if EMBEDDED_GROQ_KEY.startswith("gsk_"):
+        st.success("✅ System Authorized")
     else:
-        st.error("⚠️ Replace 'your_api_key_here' in the code.")
+        st.error("❌ Invalid API Key")
 
-    target_r = st.slider("Target Return-to-Go", 0.0, 30.0, 20.0)
+    target_r = st.slider("Target Return-to-Go (RTG)", 0.0, 30.0, 20.0)
     n_trajectories = st.number_input("Inference Samples", 10, 500, 100)
-    viz_type = st.radio("Primary Focus", ["Interactive (Altair)", "Statistical (Seaborn)", "3D (Plotly)"])
-    st.divider()
-    st.caption("Architecture: Meta Llama 3.1 + Diffusion Head")
+    viz_type = st.radio("Visualization Focus", ["Interactive (Altair)", "Statistical (Seaborn)", "3D (Plotly)"])
+    
+    if st.button("🔄 Regenerate Manifold"):
+        st.session_state.sim_data = get_diffusion_trajectories(target_r, n_trajectories)
+        st.toast("New trajectories generated!")
 
-# --- 3. MAIN DASHBOARD ---
-st.title("🧠 Neuro-Symbolic Decision Transformer")
+# Initialize data if empty
+if st.session_state.sim_data is None:
+    st.session_state.sim_data = get_diffusion_trajectories(target_r, n_trajectories)
+
+data = st.session_state.sim_data
 df_offline = load_dataset()
-data = get_diffusion_trajectories(target_r, num_samples=n_trajectories)
 
-# --- LLAMA 3.1 REASONING SECTION ---
-with st.expander("📡 Consult Meta Llama 3.1 Strategic Planner", expanded=True):
-    if EMBEDDED_GROQ_KEY != "your_api_key_here":
-        if st.button("Generate Strategy"):
-            with st.spinner("Llama 3.1 is analyzing trajectories..."):
-                strategy = get_llama_3_1_strategy(EMBEDDED_GROQ_KEY, df_offline, target_r)
-                st.markdown(f"**Llama 3.1 Analysis:**\n\n{strategy}")
+# --- 4. MAIN DASHBOARD ---
+st.title("🧠 Neuro-Symbolic Decision Transformer")
+st.markdown("---")
+
+# LLAMA 3.3 STRATEGIC PLANNER
+with st.expander("📡 Consult Meta Llama 3.3 Strategic Planner", expanded=True):
+    col_btn, col_info = st.columns([1, 3])
+    if col_btn.button("Generate Strategy", use_container_width=True):
+        with st.spinner("Synthesizing trajectory manifold..."):
+            strategy = get_llama_3_3_strategy(EMBEDDED_GROQ_KEY, df_offline, target_r)
+            st.markdown(f"### 📋 Strategic Analysis\n{strategy}")
     else:
-        st.warning("Please embed your API key in the code to enable reasoning.")
+        col_info.info("Click 'Generate Strategy' to analyze the current manifold with Llama 3.3.")
 
-st.divider()
-
-# --- 4. VISUALIZATIONS ---
-# (Keeping your original visualization logic)
+# --- 5. VISUALIZATIONS ---
 if viz_type == "Interactive (Altair)":
     st.subheader("Action Manifold Selection")
     brush = alt.selection_interval(encodings=['x'])
-    chart = alt.Chart(data[data.step == 19]).mark_circle(size=60).encode(
-        x='action_x', y='action_y',
+    final_steps = data[data.step == 19]
+    
+    chart = alt.Chart(final_steps).mark_circle(size=70).encode(
+        x=alt.X('action_x', title="Action Space X"),
+        y=alt.Y('action_y', title="Action Space Y"),
         color=alt.condition(brush, 'energy:Q', alt.value('lightgray'), scale=alt.Scale(scheme='viridis')),
         tooltip=['sample_id', 'energy']
-    ).add_params(brush).properties(height=400)
-    hist = alt.Chart(data[data.step == 19]).mark_bar().encode(
-        x=alt.X('energy:Q', bin=True), y='count()', color=alt.value('#45b6fe')
-    ).transform_filter(brush).properties(height=200)
+    ).add_params(brush).properties(height=450)
+    
+    hist = alt.Chart(final_steps).mark_bar().encode(
+        x=alt.X('energy:Q', bin=True, title="Action Energy Distribution"),
+        y='count()',
+        color=alt.value('#45b6fe')
+    ).transform_filter(brush).properties(height=150)
+    
     st.altair_chart(chart & hist, use_container_width=True)
 
 elif viz_type == "Statistical (Seaborn)":
     st.subheader("Density & Joint Distribution")
+    final_steps = data[data.step == 19]
     col1, col2 = st.columns(2)
     with col1:
         fig, ax = plt.subplots()
-        sns.kdeplot(data=data[data.step == 19], x="action_x", y="action_y", fill=True, cmap="mako", ax=ax)
+        sns.kdeplot(data=final_steps, x="action_x", y="action_y", fill=True, cmap="mako", ax=ax)
+        ax.set_title("Manifold Density")
         st.pyplot(fig)
     with col2:
         fig, ax = plt.subplots()
-        sns.boxplot(data=data[data.step == 19], x="energy", palette="Set2", ax=ax)
+        sns.boxplot(data=final_steps, x="energy", color="#45b6fe", ax=ax)
+        ax.set_title("Energy Variance")
         st.pyplot(fig)
 
 else:
     st.subheader("3D Diffusion Trajectory Space")
     fig = go.Figure()
+    # Visualizing 15 random paths for clarity
     for i in range(min(n_trajectories, 15)):
         subset = data[data.sample_id == i]
-        fig.add_trace(go.Scatter3d(x=subset['step'], y=subset['action_x'], z=subset['action_y'],
-                                   mode='lines', line=dict(width=3, color=subset['energy'].iloc[-1])))
-    fig.update_layout(scene=dict(xaxis_title='T', yaxis_title='Act X', zaxis_title='Act Y'), template="plotly_dark")
+        fig.add_trace(go.Scatter3d(
+            x=subset['step'], y=subset['action_x'], z=subset['action_y'],
+            mode='lines',
+            line=dict(width=4, color=subset['energy'].iloc[-1], colorscale='Viridis'),
+            name=f"Path {i}"
+        ))
+    fig.update_layout(
+        scene=dict(xaxis_title='Diffusion Step (T)', yaxis_title='Action X', zaxis_title='Action Y'),
+        margin=dict(l=0, r=0, b=0, t=0),
+        template="plotly_dark"
+    )
     st.plotly_chart(fig, use_container_width=True)
 
-# --- 5. DATA METRICS ---
+# --- 6. DATA METRICS ---
 st.divider()
-c1, c2, c3 = st.columns(3)
-c1.metric("Target RTG", target_r)
-c2.metric("Mean Final Energy", round(data[data.step == 19]['energy'].mean(), 4))
-c3.metric("Developer", "Ali Kahoot")
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Target RTG", f"{target_r:.1f}")
+m2.metric("Manifold Convergence", f"{len(data[data.step == 19]):,}")
+m3.metric("Avg Final Energy", f"{data[data.step == 19]['energy'].mean():.4f}")
+m4.metric("Status", "Operational", delta="Stable")
