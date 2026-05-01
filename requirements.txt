@@ -1,8 +1,8 @@
 streamlit
 pandas
 numpy
-torch
-matplotlib
-seaborn
 altair
 plotly
+seaborn
+matplotlib
+groq
